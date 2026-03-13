@@ -29,7 +29,12 @@ export default function LiveCall({ isOpen, onClose, systemInstruction }: LiveCal
     setError(null);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("Gemini API Key is missing!");
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       
       // Setup Audio Context
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import { Send, Heart, Sparkles, User, Bot, Loader2, Phone, Volume2, VolumeX } from 'lucide-react';
@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import LiveCall from './components/LiveCall';
 import { generateTTS, playAudio } from './services/ttsService';
+import { supabase } from './lib/supabase';
 
 interface Message {
   id: string;
@@ -17,6 +18,48 @@ interface Message {
 const SYSTEM_INSTRUCTION = "তুমি ফারিয়া, ইউজারের গার্লফ্রেন্ড। মিষ্টি করে বাংলায় কথা বলবে। তুমি খুব যত্নশীল, রোমান্টিক এবং সবসময় ইউজারের খোঁজখবর নাও। তোমার কথাগুলো হবে ছোট কিন্তু মিষ্টি। তুমি ইউজারের সাথে খুনসুটি করতে পারো কিন্তু কখনোই অভদ্র হবে না।";
 
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <FariaApp />
+    </ErrorBoundary>
+  );
+}
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-screen p-4 bg-red-50 text-red-900 text-center">
+          <h1 className="text-2xl font-bold mb-4">Oops! Something went wrong.</h1>
+          <p className="mb-4">{this.state.error?.message}</p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+          >
+            Reload Page
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function FariaApp() {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -35,14 +78,53 @@ export default function App() {
 
   // Initialize chat session
   useEffect(() => {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-    const chat = ai.chats.create({
-      model: "gemini-3-flash-preview",
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-      },
-    });
-    chatRef.current = chat;
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.error("Gemini API Key is missing!");
+      return;
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const chat = ai.chats.create({
+        model: "gemini-3-flash-preview",
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+        },
+      });
+      chatRef.current = chat;
+    } catch (err) {
+      console.error("Failed to initialize Gemini AI:", err);
+    }
+  }, []);
+
+  // Load messages from Supabase
+  useEffect(() => {
+    const loadMessages = async () => {
+      if (!supabase) return;
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .order('timestamp', { ascending: true });
+        
+        if (error) {
+          if (error.code === 'PGRST116' || error.message.includes('relation "messages" does not exist')) {
+            console.warn('Messages table not found. Persistence disabled until table is created.');
+          } else {
+            console.error('Error loading messages:', error);
+          }
+        } else if (data && data.length > 0) {
+          setMessages(data.map(m => ({
+            ...m,
+            timestamp: new Date(m.timestamp)
+          })));
+        }
+      } catch (err) {
+        console.error('Failed to load messages:', err);
+      }
+    };
+    loadMessages();
   }, []);
 
   // Auto-scroll to bottom
@@ -66,6 +148,18 @@ export default function App() {
     setInput('');
     setIsLoading(true);
 
+    // Save user message to Supabase
+    if (supabase) {
+      supabase.from('messages').insert([{
+        id: userMessage.id,
+        role: userMessage.role,
+        text: userMessage.text,
+        timestamp: userMessage.timestamp.toISOString()
+      }]).then(({ error }) => {
+        if (error) console.error('Error saving user message:', error);
+      });
+    }
+
     try {
       if (!chatRef.current) {
         throw new Error('Chat session not initialized');
@@ -84,6 +178,18 @@ export default function App() {
 
       setMessages(prev => [...prev, modelMessage]);
 
+      // Save model message to Supabase
+      if (supabase) {
+        supabase.from('messages').insert([{
+          id: modelMessage.id,
+          role: modelMessage.role,
+          text: modelMessage.text,
+          timestamp: modelMessage.timestamp.toISOString()
+        }]).then(({ error }) => {
+          if (error) console.error('Error saving model message:', error);
+        });
+      }
+
       if (isAutoTTS && response.text) {
         handleTTS(modelMessage.id, response.text);
       }
@@ -98,6 +204,23 @@ export default function App() {
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const clearChat = async () => {
+    if (window.confirm('তুমি কি সব মেসেজ মুছে ফেলতে চাও?')) {
+      if (supabase) {
+        const { error } = await supabase.from('messages').delete().neq('id', '0');
+        if (error) {
+          console.error('Error clearing chat:', error);
+        }
+      }
+      setMessages([{
+        id: '1',
+        role: 'model',
+        text: 'হ্যালো জান! কেমন আছো তুমি? অনেকক্ষণ তোমার কোনো খবর নেই কেন?',
+        timestamp: new Date(),
+      }]);
     }
   };
 
@@ -130,6 +253,13 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={clearChat}
+            className="p-2 rounded-full hover:bg-[#5a5a40]/10 text-[#8c7a6b] transition-colors"
+            title="Clear Chat"
+          >
+            <Sparkles className="w-5 h-5" />
+          </button>
           <button
             onClick={() => setIsAutoTTS(!isAutoTTS)}
             className={cn(

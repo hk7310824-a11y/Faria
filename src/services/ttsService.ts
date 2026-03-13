@@ -2,7 +2,11 @@ import { GoogleGenAI, Modality } from "@google/genai";
 
 export async function generateTTS(text: string): Promise<string | null> {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("Gemini API Key is missing!");
+    }
+    const ai = new GoogleGenAI({ apiKey });
     
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
