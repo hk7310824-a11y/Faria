@@ -73,6 +73,8 @@ function FariaApp() {
   const [isCallOpen, setIsCallOpen] = useState(false);
   const [isAutoTTS, setIsAutoTTS] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [isAiReady, setIsAiReady] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<any>(null);
 
@@ -81,6 +83,7 @@ function FariaApp() {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       console.error("Gemini API Key is missing!");
+      setApiKeyError(true);
       return;
     }
 
@@ -93,8 +96,11 @@ function FariaApp() {
         },
       });
       chatRef.current = chat;
+      setIsAiReady(true);
+      setApiKeyError(false);
     } catch (err) {
       console.error("Failed to initialize Gemini AI:", err);
+      setApiKeyError(true);
     }
   }, []);
 
@@ -162,7 +168,17 @@ function FariaApp() {
 
     try {
       if (!chatRef.current) {
-        throw new Error('Chat session not initialized');
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          throw new Error('API Key missing. Please set GEMINI_API_KEY in Secrets.');
+        }
+        // Try to re-initialize
+        const ai = new GoogleGenAI({ apiKey });
+        chatRef.current = ai.chats.create({
+          model: "gemini-3-flash-preview",
+          config: { systemInstruction: SYSTEM_INSTRUCTION },
+        });
+        setIsAiReady(true);
       }
 
       const response: GenerateContentResponse = await chatRef.current.sendMessage({
@@ -193,12 +209,16 @@ function FariaApp() {
       if (isAutoTTS && response.text) {
         handleTTS(modelMessage.id, response.text);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Chat error:', error);
+      const isApiKeyError = error?.message?.includes('API Key') || error?.message?.includes('403') || error?.message?.includes('401');
+      
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'model',
-        text: 'সোনা, আমার নেটওয়ার্কে একটু সমস্যা হচ্ছে। একটু পরে আবার কথা বলি?',
+        text: isApiKeyError 
+          ? 'সোনা, তোমার Gemini API Key-তে সমস্যা হচ্ছে। দয়া করে Secrets প্যানেলে গিয়ে সঠিক Key সেট করো।' 
+          : 'সোনা, আমার নেটওয়ার্কে একটু সমস্যা হচ্ছে। একটু পরে আবার কথা বলি?',
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -246,9 +266,12 @@ function FariaApp() {
           </div>
           <div>
             <h1 className="font-serif text-xl font-semibold tracking-tight">ফারিয়া</h1>
-            <p className="text-xs text-[#8c7a6b] flex items-center gap-1">
-              <Sparkles className="w-3 h-3" /> সবসময় তোমার পাশে
-            </p>
+            <div className="flex items-center gap-1.5">
+              <div className={cn("w-2 h-2 rounded-full", isAiReady ? "bg-green-500" : "bg-red-500")} />
+              <span className="text-[10px] text-[#8c7a6b]">
+                {isAiReady ? "সবসময় তোমার পাশে" : "কানেকশন নেই"}
+              </span>
+            </div>
           </div>
         </div>
 
