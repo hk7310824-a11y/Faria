@@ -1,0 +1,5 @@
+{
+  "name": "Remix: Faria - Your AI Companion",
+  "description": "A sweet and caring AI companion who speaks Bengali, designed to be your virtual girlfriend.",
+  "requestFramePermissions": ["microphone"]
+}
